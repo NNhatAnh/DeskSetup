@@ -25,9 +25,8 @@ bool hasCustomGPS = false;
 // Trạng thái hệ thống
 bool isAPMode = false;
 unsigned long lastWeatherCheck = 0;
-const unsigned long WEATHER_INTERVAL = 300000; // 5 phút kiểm tra 1 lần
+const unsigned long WEATHER_INTERVAL = 300000;
 
-// --- GIAO DIỆN 1: Trang cấu hình WiFi (Chế độ AP) ---
 const char AP_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html>
@@ -77,7 +76,6 @@ const char AP_HTML[] PROGMEM = R"rawliteral(
 </html>
 )rawliteral";
 
-// --- GIAO DIỆN 2: Trang Dashboard điều khiển nội bộ (Chế độ STA) ---
 const char STA_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html>
@@ -139,63 +137,115 @@ const char STA_HTML[] PROGMEM = R"rawliteral(
 
 void checkWeather();
 
-// Trả về giao diện tùy theo chế độ
-void handleRoot()
+// Phân loại thời tiết
+String getDetailedWeatherStatus(int id, float temp)
 {
-  if (isAPMode)
+  // Giông bão (200 - 232)
+  if (id >= 200 && id <= 232)
   {
-    server.send(200, "text/html", AP_HTML);
+    if (id == 211 || id == 212)
+      return "GIONG BAO MANH DAU DAU";
+    return "SOT SET & GIONG BAO";
   }
-  else
+
+  // Mưa phùn (300 - 321)
+  if (id >= 300 && id <= 321)
+    return "MUA PHUN RẢI RÁC / MUA LAM RAM";
+
+  // Mưa rào & Mưa to (500 - 531)
+  if (id >= 500 && id <= 531)
   {
-    server.send(200, "text/html", STA_HTML);
+    if (id == 500)
+      return "MUA NHO / MUA RAO NHE";
+    if (id == 501)
+      return "MUA VUA TẦM TÃ";
+    if (id >= 502 && id <= 504)
+      return "MUA RAT TO / MUA XOI XA";
+    if (id >= 520)
+      return "MUA RAO RỪNG RỰC KÈM GIÓ";
+    return "TROIC MUA";
   }
+
+  // Tuyết (600 - 622)
+  if (id >= 600 && id <= 622)
+    return "CO TUYET ROI";
+
+  // Sương mù / Bụi mờ (701 - 781)
+  if (id == 701 || id == 741)
+    return "SUONG MU DAY DAC";
+  if (id == 721)
+    return "SUONG MÙ MỜ / MÂY MÙ";
+  if (id == 781)
+    return "LỐC XOÁY / BAO SUONG";
+  if (id >= 700 && id <= 781)
+    return "AM U / KHOANG KHONG MỜ";
+
+  // Trời Quang / Nắng (800)
+  if (id == 800)
+  {
+    if (temp >= 36.0)
+      return "NANG GAY GAT / NANG OI OI";
+    if (temp >= 32.0)
+      return "NANG NONG OI AM";
+    if (temp >= 25.0)
+      return "TROIC NANG DEP / QUANG MAY";
+    return "NANG NHE TRONG TREN";
+  }
+
+  // Nhiều Mây (801 - 804)
+  if (id == 801)
+    return "NANG XEN MÂY / IT MÂY";
+  if (id == 802)
+    return "MÂY RẢI RÁC / TROI MAT";
+  if (id == 803)
+    return "NHIỀU MÂY / MÂY U AM";
+  if (id == 804)
+    return "MÂY AM U AM DAM (AM U)";
+
+  return "THỜI TIẾT BÌNH THƯỜNG";
 }
 
-// Quét mạng WiFi cho trang AP
+void handleRoot()
+{
+  server.send(200, "text/html", isAPMode ? AP_HTML : STA_HTML);
+}
+
 void handleScan()
 {
   int n = WiFi.scanNetworks();
   JsonDocument doc;
   JsonArray array = doc.to<JsonArray>();
-
   for (int i = 0; i < n; ++i)
   {
     JsonObject obj = array.add<JsonObject>();
     obj["ssid"] = WiFi.SSID(i);
     obj["rssi"] = WiFi.RSSI(i);
   }
-
   String jsonString;
   serializeJson(doc, jsonString);
   server.send(200, "application/json", jsonString);
 }
 
-// Lưu thông tin WiFi từ AP
 void handleSave()
 {
   if (server.hasArg("ssid") && server.hasArg("pass"))
   {
     ssid = server.arg("ssid");
     pass = server.arg("pass");
-
     preferences.begin("wifi_config", false);
     preferences.putString("ssid", ssid);
     preferences.putString("pass", pass);
     preferences.end();
-
-    String html = "<html><body><h2>Da luu WiFi! ESP32 dang khoi dong lai de ket noi...</h2></body></html>";
-    server.send(200, "text/html", html);
+    server.send(200, "text/html", "<html><body><h2>Da luu WiFi! ESP32 đang khoi dong lai...</h2></body></html>");
     delay(2000);
     ESP.restart();
   }
   else
   {
-    server.send(400, "text/plain", "Thieu thông tin!");
+    server.send(400, "text/plain", "Thieu thong tin!");
   }
 }
 
-// Cập nhật GPS chính xác từ Dashboard nội bộ
 void handleUpdateGPS()
 {
   if (server.hasArg("lat") && server.hasArg("lon"))
@@ -203,14 +253,12 @@ void handleUpdateGPS()
     userLat = server.arg("lat").toFloat();
     userLon = server.arg("lon").toFloat();
     hasCustomGPS = true;
-
     preferences.begin("wifi_config", false);
     preferences.putFloat("lat", userLat);
     preferences.putFloat("lon", userLon);
     preferences.end();
-
-    Serial.printf("\n[GPS] Da cap nhat toa do moi: Lat=%.6f, Lon=%.6f\n", userLat, userLon);
-    checkWeather(); // Kiểm tra thời tiết ngay với tọa độ mới
+    Serial.printf("\n[GPS] Da cap nhat toa do: Lat=%.6f, Lon=%.6f\n", userLat, userLon);
+    checkWeather();
     server.send(200, "text/plain", "OK");
   }
   else
@@ -219,26 +267,21 @@ void handleUpdateGPS()
   }
 }
 
-// Xóa cài đặt WiFi để cấu hình lại
 void handleReset()
 {
   preferences.begin("wifi_config", false);
   preferences.clear();
   preferences.end();
-
-  String html = "<html><body><h2>Da xoa cau hinh WiFi! ESP32 dang khoi dong lai...</h2></body></html>";
-  server.send(200, "text/html", html);
+  server.send(200, "text/html", "<html><body><h2>Da xoa WiFi! Khoi dong lai...</h2></body></html>");
   delay(2000);
   ESP.restart();
 }
 
-// Bật AP Mode
 void startAPMode()
 {
   isAPMode = true;
   WiFi.mode(WIFI_AP);
   WiFi.softAP(AP_SSID, AP_PASS);
-
   dnsServer.start(53, "*", WiFi.softAPIP());
 
   server.on("/", handleRoot);
@@ -247,25 +290,22 @@ void startAPMode()
   server.onNotFound(handleRoot);
   server.begin();
 
-  Serial.println("\n--- CHẾ ĐỘ ACCESS POINT ---");
+  Serial.println("\n--- ACCESS POINT MODE ---");
   Serial.print("WiFi AP: ");
   Serial.println(AP_SSID);
-  Serial.print("IP Web Config: ");
+  Serial.print("IP: ");
   Serial.println(WiFi.softAPIP());
 }
 
-// Kết nối WiFi đã lưu
 bool connectWiFi()
 {
   if (ssid == "")
     return false;
-
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid.c_str(), pass.c_str());
 
   Serial.print("Dang ket noi WiFi: ");
   Serial.print(ssid);
-
   int count = 0;
   while (WiFi.status() != WL_CONNECTED && count < 20)
   {
@@ -276,19 +316,16 @@ bool connectWiFi()
 
   if (WiFi.status() == WL_CONNECTED)
   {
-    Serial.println("\n-> Ket noi thanh cong!");
-    Serial.print("Dia chi IP noi bo: ");
+    Serial.println("\n-> Ket noi thành cong!");
+    Serial.print("IP Noic bo: ");
     Serial.println(WiFi.localIP());
 
-    // Khởi tạo Web Server ở chế độ Station
     server.on("/", handleRoot);
     server.on("/update_gps", handleUpdateGPS);
     server.on("/reset", HTTP_POST, handleReset);
     server.begin();
-
     return true;
   }
-
   Serial.println("\n-> Ket noi that bai!");
   return false;
 }
@@ -297,7 +334,6 @@ void setup()
 {
   Serial.begin(115200);
 
-  // Đọc dữ liệu đã lưu
   preferences.begin("wifi_config", true);
   ssid = preferences.getString("ssid", "");
   pass = preferences.getString("pass", "");
@@ -306,9 +342,7 @@ void setup()
   preferences.end();
 
   if (userLat != 0.0 && userLon != 0.0)
-  {
     hasCustomGPS = true;
-  }
 
   if (!connectWiFi())
   {
@@ -316,7 +350,7 @@ void setup()
   }
   else
   {
-    checkWeather(); // Kiểm tra thời tiết ngay khi khởi động xong
+    checkWeather();
   }
 }
 
@@ -329,9 +363,7 @@ void loop()
   }
   else
   {
-    server.handleClient(); // Xử lý các yêu cầu truy cập Web Dashboard nội bộ
-
-    // Định kỳ 5 phút kiểm tra thời tiết
+    server.handleClient();
     if (millis() - lastWeatherCheck >= WEATHER_INTERVAL)
     {
       lastWeatherCheck = millis();
@@ -343,21 +375,18 @@ void loop()
   }
 }
 
-// Hàm lấy thông tin thời tiết & Mưa
 void checkWeather()
 {
   if (OPENWEATHER_API_KEY == "YOUR_OPENWEATHERMAP_API_KEY")
   {
-    Serial.println("[Canch bao] Vui long nhap OpenWeatherMap API Key!");
+    Serial.println("[Canh bao] Nhap OpenWeatherMap API Key!");
     return;
   }
 
   HTTPClient http;
 
-  // Nếu người dùng chưa từng cập nhật GPS thủ công, ESP32 tự lấy GPS tương đối qua IP
   if (!hasCustomGPS)
   {
-    Serial.println("Dang lay vi tri tu dong qua ip-api.com...");
     http.begin("http://ipwho.is/");
     int code = http.GET();
     if (code == HTTP_CODE_OK)
@@ -368,21 +397,17 @@ void checkWeather()
       {
         userLat = ipDoc["latitude"].as<float>();
         userLon = ipDoc["longitude"].as<float>();
-        Serial.printf("Vi tri theo IP: %s (Lat: %.4f, Lon: %.4f)\n",
-                      ipDoc["city"].as<const char *>(), userLat, userLon);
       }
     }
     http.end();
   }
 
-  // Nếu vẫn không lấy được tọa độ thì dừng lại
   if (userLat == 0.0 && userLon == 0.0)
   {
-    Serial.println("Khong co toan do hop le de kiem tra thoi tiet!");
+    Serial.println("Khong co toa do hop le!");
     return;
   }
 
-  // Gọi OpenWeatherMap API
   String url = "http://api.openweathermap.org/data/2.5/weather?lat=" + String(userLat, 6) +
                "&lon=" + String(userLon, 6) + "&appid=" + OPENWEATHER_API_KEY + "&units=metric&lang=vi";
 
@@ -397,23 +422,23 @@ void checkWeather()
     int weatherId = doc["weather"][0]["id"].as<int>();
     String description = doc["weather"][0]["description"].as<String>();
     float temp = doc["main"]["temp"].as<float>();
+    float feelsLike = doc["main"]["feels_like"].as<float>();
+    int humidity = doc["main"]["humidity"].as<int>();
+    float windSpeed = doc["wind"]["speed"].as<float>();
+    int clouds = doc["clouds"]["all"].as<int>();
     String city = doc["name"].as<String>();
 
-    Serial.println("\n========== THONG TIN THOI TIET ==========");
-    Serial.printf("Khu vuc: %s\n", city.c_str());
-    Serial.printf("Nhiet do: %.1f C\n", temp);
-    Serial.printf("Trang thai: %s (ID: %d)\n", description.c_str(), weatherId);
+    // Lấy trạng thái thời tiết phân loại chi tiết
+    String statusDetail = getDetailedWeatherStatus(weatherId, temp);
 
-    // Kiểm tra các mã ID thời tiết báo Mưa (200 - 531)
-    if (weatherId >= 200 && weatherId <= 531)
-    {
-      Serial.println("===> THONG BAO: HIENTAI DANG CO MUA! <===");
-    }
-    else
-    {
-      Serial.println("Trời không mưa.");
-    }
-    Serial.println("=========================================\n");
+    Serial.println("\n========== THONG TIN THOI TIET CHI TIET ==========");
+    Serial.printf("Khu vuc       : %s\n", city.c_str());
+    Serial.printf("Trang thai    : %s (Mô tả OpenWeather: %s)\n", statusDetail.c_str(), description.c_str());
+    Serial.printf("Nhiet do      : %.1f °C (Cam giac nhu: %.1f °C)\n", temp, feelsLike);
+    Serial.printf("Do am         : %d %%\n", humidity);
+    Serial.printf("Toc do gio    : %.1f m/s\n", windSpeed);
+    Serial.printf("Do che phu may: %d %%\n", clouds);
+    Serial.println("==================================================\n");
   }
   else
   {
